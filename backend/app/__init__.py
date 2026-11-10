@@ -1,0 +1,1 @@
+"""QuakeResQ backend application package."""
