@@ -13,7 +13,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import networkx as nx
 
@@ -49,11 +49,22 @@ class GraphService:
         self._base_graph: nx.MultiDiGraph | None = None
         self._working_graph: nx.MultiDiGraph | None = None
         self._config: GraphConfig | None = None
+        self._reset_callbacks: list[Callable[[], None]] = []
 
         if cache_dir is not None:
             self._cache_dir = Path(cache_dir)
         else:
             self._cache_dir = Path(__file__).resolve().parents[2] / "data" / "graph_cache"
+
+    def register_reset_callback(self, callback: Callable[[], None]) -> None:
+        """Register a callback to be invoked whenever the working graph is reset or replaced."""
+        if callback not in self._reset_callbacks:
+            self._reset_callbacks.append(callback)
+
+    def unregister_reset_callback(self, callback: Callable[[], None]) -> None:
+        """Unregister a previously registered reset callback."""
+        if callback in self._reset_callbacks:
+            self._reset_callbacks.remove(callback)
 
     @property
     def is_loaded(self) -> bool:
@@ -104,12 +115,23 @@ class GraphService:
         self._base_graph = copy.deepcopy(base)
         self._working_graph = copy.deepcopy(base)
         self._config = config
+        self._notify_reset_callbacks()
 
     def reset_working_graph(self) -> None:
         """Restore working graph to a fresh deep copy of the base graph."""
         if self._base_graph is None:
             raise RuntimeError("Cannot reset working graph: base graph is not loaded.")
         self._working_graph = copy.deepcopy(self._base_graph)
+        self._notify_reset_callbacks()
+
+    def _notify_reset_callbacks(self) -> None:
+        """Invoke all registered reset callbacks safely."""
+        if hasattr(self, "_reset_callbacks"):
+            for callback in list(self._reset_callbacks):
+                try:
+                    callback()
+                except Exception:
+                    pass
 
     def download_from_osm(self, config: GraphConfig) -> nx.MultiDiGraph:
         """Download an OpenStreetMap road network using OSMnx and build a MultiDiGraph."""
