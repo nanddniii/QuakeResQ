@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 EarthquakeStatus = Literal["active", "resolved", "cancelled"]
 IncidentStatus = Literal[
-    "reported", "acknowledged", "in_progress", "resolved", "closed"
+    "reported", "verified", "assigned", "in_progress", "resolved", "closed"
 ]
 RescueTeamStatus = Literal[
     "available", "assigned", "deployed", "unavailable", "off_duty"
@@ -15,8 +15,9 @@ RescueTeamStatus = Literal[
 RoadClosureStatus = Literal["active", "cleared", "scheduled"]
 PlanningRunStatus = Literal["pending", "running", "completed", "failed"]
 AssignmentStatus = Literal[
-    "assigned", "accepted", "in_progress", "completed", "cancelled"
+    "pending", "assigned", "in_progress", "completed", "cancelled", "failed"
 ]
+PriorityLevel = Literal["Critical", "High", "Medium", "Low"]
 
 
 class EntityResponse(BaseModel):
@@ -50,9 +51,23 @@ class IncidentRequest(BaseModel):
     earthquake_id: int | None = None
     title: str = Field(min_length=1, max_length=200)
     description: str | None = None
+    severity: int = Field(ge=1, le=5)
+    people_affected: int = Field(ge=0)
+    urgency: int | None = Field(default=None, ge=1, le=5)
+    evidence_strength: int | None = Field(default=None, ge=1, le=5)
     status: IncidentStatus = "reported"
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_client_priority_values(cls, value: object) -> object:
+        if isinstance(value, dict):
+            restricted_fields = {"priority_score", "priority_level"}.intersection(value)
+            if restricted_fields:
+                field_names = ", ".join(sorted(restricted_fields))
+                raise ValueError(f"{field_names} cannot be supplied when creating an incident")
+        return value
 
 
 class IncidentResponse(EntityResponse):
@@ -60,6 +75,12 @@ class IncidentResponse(EntityResponse):
     earthquake_id: int | None
     title: str = Field(max_length=200)
     description: str | None
+    severity: int | None = Field(ge=1, le=5)
+    people_affected: int | None = Field(ge=0)
+    urgency: int | None = Field(ge=1, le=5)
+    evidence_strength: int | None = Field(ge=1, le=5)
+    priority_score: float | None = Field(ge=0, le=100)
+    priority_level: PriorityLevel | None
     status: IncidentStatus
     latitude: float
     longitude: float
@@ -71,6 +92,7 @@ class RescueTeamRequest(BaseModel):
     team_type: str = Field(min_length=1, max_length=80)
     status: RescueTeamStatus = "available"
     capacity: int = Field(default=1, ge=1)
+    members_count: int = Field(ge=1)
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
 
@@ -80,7 +102,8 @@ class RescueTeamResponse(EntityResponse):
     name: str = Field(max_length=150)
     team_type: str = Field(max_length=80)
     status: RescueTeamStatus
-    capacity: int
+    capacity: int = Field(ge=1)
+    members_count: int | None = Field(ge=1)
     latitude: float
     longitude: float
 
@@ -149,3 +172,30 @@ class AssignmentResponse(EntityResponse):
     rescue_team_id: int
     status: AssignmentStatus
     assigned_at: datetime
+
+
+class AllocationAssignmentDetail(BaseModel):
+    assignment_id: int
+    incident_id: int
+    incident_title: str
+    rescue_team_id: int
+    rescue_team_name: str
+    status: AssignmentStatus
+    priority_score: float | None = Field(default=None, ge=0, le=100)
+    priority_level: PriorityLevel | None = None
+    road_distance_km: float = Field(ge=0)
+    estimated_time_minutes: float = Field(ge=0)
+
+
+class UnassignedIncidentDetail(BaseModel):
+    incident_id: int
+    title: str
+    reason: str
+
+
+class AllocationResponse(BaseModel):
+    planning_run_id: int
+    status: PlanningRunStatus
+    assignments: list[AllocationAssignmentDetail]
+    unassigned_incidents: list[UnassignedIncidentDetail]
+    summary: str
