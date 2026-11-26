@@ -67,7 +67,7 @@ class RoutingService:
         if working_graph.number_of_nodes() == 0:
             raise ValueError("Road network graph contains no nodes.")
 
-        start_node = self._graph_service.find_nearest_node(start_lat, start_lon)
+        start_node = self._graph_service.find_nearest_departure_node(start_lat, start_lon)
         dest_node = self._graph_service.find_nearest_node(dest_lat, dest_lon)
 
         return self.find_route_between_nodes(

@@ -260,6 +260,9 @@ class EarthquakeGeoJsonMetadata(BaseModel):
     queried_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     synced_to_db: bool = False
     inserted_count: int | None = None
+    cached_fallback: bool = False
+    feed: str | None = None
+    region: str | None = None
 
 
 class EarthquakeFeatureCollection(BaseModel):

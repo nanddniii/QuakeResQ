@@ -384,7 +384,8 @@ def test_allocation_avoids_existing_active_assignments(
     assert [item["rescue_team_id"] for item in result["assignments"]] == [
         free_team.id
     ]
-    assert result["unassigned_incidents"][0]["incident_id"] == existing_incident.id
+    assert result["unassigned_incidents"] == []
+    assert "already assigned" in result["summary"]
     assert test_db_session.scalar(select(func.count()).select_from(Assignment)) == 2
     assert test_db_session.get(Assignment, prior_assignment_id).status == "assigned"
 

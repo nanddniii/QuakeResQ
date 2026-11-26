@@ -18,6 +18,12 @@ import httpx
 logger = logging.getLogger(__name__)
 
 USGS_EVENT_API_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
+USGS_FEEDS: dict[str, str] = {
+    "all_day": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson",
+    "all_week": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_week.geojson",
+    "all_hour": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson",
+    "all_month": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_month.geojson",
+}
 
 
 class EarthquakeServiceError(Exception):
@@ -170,6 +176,51 @@ class EarthquakeService:
             ) from e
         except httpx.RequestError as e:
             raise EarthquakeNetworkError(f"USGS API network/connection error: {e}") from e
+
+        return self.normalize_geojson(data)
+
+    def fetch_feed(
+        self,
+        feed: str = "all_day",
+        timeout: float | None = None,
+    ) -> list[NormalizedEarthquake]:
+        """
+        Fetch real-time earthquake events from an official USGS GeoJSON summary feed.
+
+        Supported feeds include 'all_day', 'all_week', 'all_hour', 'all_month',
+        or any valid full GeoJSON URL.
+        """
+        feed_url = USGS_FEEDS.get(feed.lower(), feed)
+        req_timeout = timeout if timeout is not None else self.timeout
+
+        try:
+            if self._client is not None:
+                response = self._client.get(feed_url, timeout=req_timeout)
+            else:
+                with httpx.Client(timeout=req_timeout) as client:
+                    response = client.get(feed_url)
+
+            if response.status_code != 200:
+                raise EarthquakeAPIError(
+                    f"USGS feed error HTTP {response.status_code}: {response.text[:200]}",
+                    status_code=response.status_code,
+                )
+
+            try:
+                data = response.json()
+            except Exception as e:
+                raise EarthquakeParseError(f"Failed to parse USGS feed response as JSON: {e}") from e
+
+        except httpx.TimeoutException as e:
+            raise EarthquakeTimeoutError(f"USGS feed request timed out after {req_timeout}s: {e}") from e
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code if e.response is not None else None
+            raise EarthquakeAPIError(
+                f"USGS feed HTTP status error {status}: {e}",
+                status_code=status,
+            ) from e
+        except httpx.RequestError as e:
+            raise EarthquakeNetworkError(f"USGS feed network/connection error: {e}") from e
 
         return self.normalize_geojson(data)
 

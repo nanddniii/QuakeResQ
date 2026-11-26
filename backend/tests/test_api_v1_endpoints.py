@@ -47,7 +47,10 @@ from app.schemas.api_models import (
     RoadReopenRequest,
     RouteRequest,
 )
+from app.services.closure_service import ClosureService
 from app.services.earthquake_service import NormalizedEarthquake
+from app.services.graph_service import GraphService
+from app.services.routing_service import RoutingService
 
 
 @pytest.fixture(autouse=True)
@@ -130,8 +133,8 @@ def test_api_v1_router_paths_registered() -> None:
 
 def test_get_road_graph_unloaded() -> None:
     """When graph is not loaded, /roads/graph reports unloaded status safely."""
-    gs = get_graph_service()
-    cs = get_closure_service(gs)
+    gs = GraphService(cache_dir="/nonexistent")
+    cs = ClosureService(gs)
 
     resp = get_road_graph(graph_service=gs, closure_service=cs)
     assert resp.status == "unloaded"
@@ -161,8 +164,8 @@ def test_get_road_graph_loaded(synthetic_graph: nx.MultiDiGraph) -> None:
 
 def test_calculate_route_endpoint_unloaded_raises_400() -> None:
     """Route calculation when graph is not loaded raises HTTP 400."""
-    gs = get_graph_service()
-    rs = get_routing_service(gs)
+    gs = GraphService(cache_dir="/nonexistent")
+    rs = RoutingService(gs)
 
     req = RouteRequest(
         start_lat=37.428, start_lon=-122.145, dest_lat=37.435, dest_lon=-122.135

@@ -386,3 +386,30 @@ def test_invalid_query_parameters_validation() -> None:
 
     with pytest.raises(ValueError, match="Event ID must be a non-empty string"):
         service.get_earthquake_by_id("")
+
+
+def test_fetch_feed_success(sample_geojson: dict[str, Any]) -> None:
+    """fetch_feed parses an official USGS GeoJSON summary feed (e.g. all_day)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "all_day.geojson" in str(request.url)
+        return httpx.Response(200, json=sample_geojson)
+
+    service = EarthquakeService(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    events = service.fetch_feed("all_day")
+    assert len(events) == 2
+    assert events[0].external_id == "nc73821036"
+    assert events[0].magnitude == 5.4
+
+
+def test_fetch_feed_custom_url(sample_geojson: dict[str, Any]) -> None:
+    """fetch_feed accepts full USGS GeoJSON URLs as well."""
+    target_url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_week.geojson"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == target_url
+        return httpx.Response(200, json=sample_geojson)
+
+    service = EarthquakeService(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    events = service.fetch_feed(target_url)
+    assert len(events) == 2

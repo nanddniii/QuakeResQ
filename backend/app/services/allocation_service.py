@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -27,11 +29,22 @@ class AllocationRoutingError(RuntimeError):
     """Raised when RoutingService cannot calculate a usable road route."""
 
 
+@contextmanager
+def _transaction(session: Session) -> Iterator[None]:
+    """Join caller-owned transactions, or commit this operation when standalone."""
+    if session.in_transaction():
+        yield
+    else:
+        with session.begin():
+            yield
+
+
 def allocate_incidents(
     session: Session, routing_service: RoutingService
 ) -> AllocationResponse:
-    with session.begin():
-        incidents = list(
+    with _transaction(session):
+        # 1. Query all non-terminal incidents ordered by priority score descending
+        all_incidents = list(
             session.scalars(
                 select(Incident)
                 .where(Incident.status.notin_(("resolved", "closed")))
@@ -43,45 +56,62 @@ def allocate_incidents(
                 .with_for_update()
             ).all()
         )
-        available_teams = list(
-            session.scalars(
-                select(RescueTeam)
-                .where(RescueTeam.status == "available")
-                .order_by(RescueTeam.id.asc())
-                .with_for_update()
-            ).all()
-        )
+
+        # 2. Query all existing active assignments from database
         active_assignments = session.execute(
             select(Assignment.incident_id, Assignment.rescue_team_id).where(
                 Assignment.status.in_(ACTIVE_ASSIGNMENT_STATUSES)
             )
         ).all()
         active_incident_ids = {incident_id for incident_id, _ in active_assignments}
-        active_team_ids = {team_id for _, team_id in active_assignments}
 
-        capacity_teams = [
+        # 3. Separate incidents into pending (need assignment) vs already assigned
+        pending_incidents = [
+            inc for inc in all_incidents if inc.id not in active_incident_ids
+        ]
+        already_assigned_incidents = [
+            inc for inc in all_incidents if inc.id in active_incident_ids
+        ]
+
+        # 4. Query active rescue teams (both 'available' and 'assigned' can have remaining capacity)
+        candidate_teams = list(
+            session.scalars(
+                select(RescueTeam)
+                .where(RescueTeam.status.in_(("available", "assigned")))
+                .order_by(RescueTeam.id.asc())
+                .with_for_update()
+            ).all()
+        )
+
+        # 5. Compute dynamic remaining capacity per team based on active assignments
+        team_workload: dict[int, int] = {}
+        for _, tid in active_assignments:
+            team_workload[tid] = team_workload.get(tid, 0) + ASSIGNMENT_WORKLOAD
+
+        team_remaining_capacity: dict[int, int] = {
+            team.id: team.capacity - team_workload.get(team.id, 0)
+            for team in candidate_teams
+        }
+
+        # Eligible teams are those with remaining capacity >= ASSIGNMENT_WORKLOAD
+        eligible_teams = [
             team
-            for team in available_teams
-            if team.capacity >= ASSIGNMENT_WORKLOAD
+            for team in candidate_teams
+            if team_remaining_capacity[team.id] >= ASSIGNMENT_WORKLOAD
         ]
-        remaining_teams = [
-            team for team in capacity_teams if team.id not in active_team_ids
-        ]
+
         planned_assignments: list[tuple[Incident, RescueTeam, RouteResult]] = []
         unassigned: list[UnassignedIncidentDetail] = []
 
-        for incident in incidents:
-            if incident.id in active_incident_ids:
-                reason = "Incident already has an active assignment."
-            elif not available_teams:
+        # 6. Allocation loop over pending incidents only
+        for incident in pending_incidents:
+            if not candidate_teams:
                 reason = "No rescue teams are currently available."
-            elif not capacity_teams:
-                reason = "No available team has capacity for one incident."
-            elif not remaining_teams:
-                reason = "All eligible teams already have an active or new assignment."
+            elif not eligible_teams:
+                reason = "All eligible teams have reached maximum capacity."
             else:
                 route_candidates: list[tuple[RescueTeam, RouteResult]] = []
-                for team in remaining_teams:
+                for team in eligible_teams:
                     try:
                         route = routing_service.find_route(
                             start_lat=team.latitude,
@@ -123,7 +153,9 @@ def allocate_incidents(
                         ),
                     )
                     planned_assignments.append((incident, team, route))
-                    remaining_teams.remove(team)
+                    team_remaining_capacity[team.id] -= ASSIGNMENT_WORKLOAD
+                    if team_remaining_capacity[team.id] < ASSIGNMENT_WORKLOAD:
+                        eligible_teams.remove(team)
                     continue
 
             unassigned.append(
@@ -134,6 +166,7 @@ def allocate_incidents(
                 )
             )
 
+        # 7. Persist PlanningRun and new Assignments
         persistence = PlanningPersistenceService(session)
         planning_run = persistence.create_planning_run(
             PlanningRunRequest(status="running")
@@ -149,7 +182,6 @@ def allocate_incidents(
                 )
             )
             incident.status = "assigned"
-            team.status = "assigned"
             assignment_details.append(
                 AllocationAssignmentDetail(
                     assignment_id=assignment.id,
@@ -165,13 +197,26 @@ def allocate_incidents(
                 )
             )
 
-        if not incidents:
+        # 8. Update team statuses consistently based on remaining capacity
+        for team in candidate_teams:
+            if team_remaining_capacity.get(team.id, 0) <= 0:
+                team.status = "assigned"
+            else:
+                team.status = "available"
+
+        # 9. Format Summary distinguishing newly allocated, unassigned, and already assigned
+        if not all_incidents:
             summary = "No eligible incidents were found."
         else:
-            summary = (
-                f"Allocated {len(assignment_details)} incident(s); "
-                f"{len(unassigned)} incident(s) remain unassigned."
-            )
+            parts = [f"Allocated {len(assignment_details)} incident(s)"]
+            if unassigned:
+                parts.append(f"{len(unassigned)} incident(s) remain unassigned")
+            else:
+                parts.append("0 incident(s) remain unassigned")
+            if already_assigned_incidents:
+                parts.append(f"{len(already_assigned_incidents)} incident(s) already assigned")
+            summary = "; ".join(parts) + "."
+
         persistence.update_planning_run(
             planning_run.id,
             PlanningRunRequest(

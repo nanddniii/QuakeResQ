@@ -11,6 +11,13 @@ venv/
 *.sqlite
 *.sqlite3
 .env
+.env.*
+!.env.example
+
+# Road graph caches
+*.graphml
+backend/data/
+data/
 
 # JavaScript
 node_modules/

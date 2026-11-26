@@ -15,7 +15,7 @@ RescueTeamStatus = Literal[
 RoadClosureStatus = Literal["active", "cleared", "scheduled"]
 PlanningRunStatus = Literal["pending", "running", "completed", "failed"]
 AssignmentStatus = Literal[
-    "pending", "assigned", "in_progress", "completed", "cancelled", "failed"
+    "pending", "assigned", "in_progress", "completed", "cancelled", "failed", "reassigned"
 ]
 PriorityLevel = Literal["Critical", "High", "Medium", "Low"]
 
@@ -106,6 +106,8 @@ class RescueTeamResponse(EntityResponse):
     members_count: int | None = Field(ge=1)
     latitude: float
     longitude: float
+    active_assignments_count: int = 0
+    remaining_capacity: int | None = None
 
 
 class RoadClosureRequest(BaseModel):
@@ -185,6 +187,7 @@ class AllocationAssignmentDetail(BaseModel):
     priority_level: PriorityLevel | None = None
     road_distance_km: float = Field(ge=0)
     estimated_time_minutes: float = Field(ge=0)
+    is_reassignment: bool = False
 
 
 class UnassignedIncidentDetail(BaseModel):
@@ -197,5 +200,43 @@ class AllocationResponse(BaseModel):
     planning_run_id: int
     status: PlanningRunStatus
     assignments: list[AllocationAssignmentDetail]
+    unassigned_incidents: list[UnassignedIncidentDetail]
+    summary: str
+
+
+class ReassignmentDetail(BaseModel):
+    preempted_assignment_id: int
+    preempted_incident_id: int
+    preempted_incident_title: str
+    preempted_priority_score: float | None = None
+    new_assignment_id: int
+    new_incident_id: int
+    new_incident_title: str
+    new_priority_score: float | None = None
+    rescue_team_id: int
+    rescue_team_name: str
+    justification: str
+
+
+class RouteRecalculationDetail(BaseModel):
+    assignment_id: int
+    incident_id: int
+    incident_title: str
+    rescue_team_id: int
+    rescue_team_name: str
+    previous_distance_km: float | None = None
+    previous_time_minutes: float | None = None
+    new_distance_km: float | None = None
+    new_time_minutes: float | None = None
+    status: Literal["rerouted", "severed", "unchanged"]
+    message: str
+
+
+class ReplanningResponse(BaseModel):
+    planning_run_id: int
+    status: PlanningRunStatus
+    new_assignments: list[AllocationAssignmentDetail]
+    reassignments: list[ReassignmentDetail]
+    recalculated_routes: list[RouteRecalculationDetail]
     unassigned_incidents: list[UnassignedIncidentDetail]
     summary: str

@@ -47,7 +47,9 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def initialize_database() -> None:
-    """Create all tables registered by the shared model package."""
+    """Create all tables registered by the shared model package and run migrations."""
     from app import models  # noqa: F401
+    from app.migrations import run_migrations
 
     Base.metadata.create_all(bind=engine)
+    run_migrations(engine)

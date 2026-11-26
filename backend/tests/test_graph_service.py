@@ -366,3 +366,35 @@ def test_osmnx_and_pure_networkx_cache_paths(tmp_path: Path) -> None:
     assert s_ox.get_config() is not None
     assert s_ox.get_config().default_speed_kmh == 48.0
 
+
+def test_find_nearest_departure_and_arrival_nodes() -> None:
+    """Verify departure node selection avoids sinks and arrival node selection avoids sources."""
+    service = GraphService()
+    g = nx.MultiDiGraph()
+    # Node 1 -> Node 2 -> Node 3 (sink)
+    # Node 1 is source (in_degree=0, out_degree=1)
+    # Node 3 is sink (in_degree=1, out_degree=0)
+    # Node 2 is through-node (in_degree=1, out_degree=1)
+    g.add_node(1, y=12.90, x=77.50)
+    g.add_node(2, y=12.91, x=77.50)
+    g.add_node(3, y=12.92, x=77.50)
+    g.add_edge(1, 2, key=0, length=100.0, speed_kph=40.0)
+    g.add_edge(2, 3, key=0, length=100.0, speed_kph=40.0)
+    service.set_graph(g)
+
+    # Point very close to Node 3 (sink node)
+    # Primary nearest node is Node 3
+    assert service.find_nearest_node(12.92001, 77.50) == 3
+    # find_nearest_departure_node must avoid Node 3 (out_degree=0) and select Node 2
+    departure_node = service.find_nearest_departure_node(12.92001, 77.50, max_distance_meters=2000.0)
+    assert departure_node == 2
+    assert service.get_working_graph().out_degree(departure_node) > 0
+
+    # Point very close to Node 1 (source node)
+    # Primary nearest node is Node 1
+    assert service.find_nearest_node(12.89999, 77.50) == 1
+    # find_nearest_arrival_node must avoid Node 1 (in_degree=0) and select Node 2
+    arrival_node = service.find_nearest_arrival_node(12.89999, 77.50, max_distance_meters=2000.0)
+    assert arrival_node == 2
+    assert service.get_working_graph().in_degree(arrival_node) > 0
+

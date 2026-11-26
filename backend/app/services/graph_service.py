@@ -277,6 +277,112 @@ class GraphService:
         # Offline fallback: Haversine distance over node coordinates
         return self._find_nearest_node_fallback(latitude, longitude)
 
+    def find_nearest_departure_node(
+        self,
+        latitude: float,
+        longitude: float,
+        max_distance_meters: float = 500.0,
+    ) -> Any:
+        """
+        Find the nearest road network node with at least one outgoing edge (out_degree > 0).
+
+        Prevents route calculation failure when departure points snap to terminal
+        sink nodes (e.g. one-way highway off-ramps or dead ends in directed graphs).
+        If the primary nearest node has out_degree > 0, it is returned immediately.
+        Otherwise, finds the closest node with out_degree > 0 within max_distance_meters.
+        Falls back to find_nearest_node if no routable node is within max_distance_meters.
+        """
+        if self._working_graph is None:
+            raise RuntimeError("Graph is not loaded.")
+
+        if self._working_graph.number_of_nodes() == 0:
+            raise ValueError("Graph contains no nodes.")
+
+        primary_nearest = self.find_nearest_node(latitude, longitude)
+        if self._working_graph.out_degree(primary_nearest) > 0:
+            return primary_nearest
+
+        best_node = None
+        min_dist = float("inf")
+
+        for node_id, data in self._working_graph.nodes(data=True):
+            if self._working_graph.out_degree(node_id) == 0:
+                continue
+
+            node_lat = data.get("y", data.get("lat", data.get("latitude")))
+            node_lon = data.get("x", data.get("lon", data.get("longitude")))
+            if node_lat is None or node_lon is None:
+                continue
+
+            try:
+                n_lat = float(node_lat)
+                n_lon = float(node_lon)
+            except (ValueError, TypeError):
+                continue
+
+            dist = self._haversine_distance(latitude, longitude, n_lat, n_lon)
+            if dist < min_dist:
+                min_dist = dist
+                best_node = node_id
+
+        if best_node is not None and min_dist <= max_distance_meters:
+            return best_node
+
+        return primary_nearest
+
+    def find_nearest_arrival_node(
+        self,
+        latitude: float,
+        longitude: float,
+        max_distance_meters: float = 500.0,
+    ) -> Any:
+        """
+        Find the nearest road network node with at least one incoming edge (in_degree > 0).
+
+        Prevents route calculation failure when arrival points snap to source-only
+        nodes (nodes with zero incoming edges in directed graphs).
+        If the primary nearest node has in_degree > 0, it is returned immediately.
+        Otherwise, finds the closest node with in_degree > 0 within max_distance_meters.
+        Falls back to find_nearest_node if no arrival node is within max_distance_meters.
+        """
+        if self._working_graph is None:
+            raise RuntimeError("Graph is not loaded.")
+
+        if self._working_graph.number_of_nodes() == 0:
+            raise ValueError("Graph contains no nodes.")
+
+        primary_nearest = self.find_nearest_node(latitude, longitude)
+        if self._working_graph.in_degree(primary_nearest) > 0:
+            return primary_nearest
+
+        best_node = None
+        min_dist = float("inf")
+
+        for node_id, data in self._working_graph.nodes(data=True):
+            if self._working_graph.in_degree(node_id) == 0:
+                continue
+
+            node_lat = data.get("y", data.get("lat", data.get("latitude")))
+            node_lon = data.get("x", data.get("lon", data.get("longitude")))
+            if node_lat is None or node_lon is None:
+                continue
+
+            try:
+                n_lat = float(node_lat)
+                n_lon = float(node_lon)
+            except (ValueError, TypeError):
+                continue
+
+            dist = self._haversine_distance(latitude, longitude, n_lat, n_lon)
+            if dist < min_dist:
+                min_dist = dist
+                best_node = node_id
+
+        if best_node is not None and min_dist <= max_distance_meters:
+            return best_node
+
+        return primary_nearest
+
     def _find_nearest_node_fallback(self, latitude: float, longitude: float) -> Any:
         """Offline calculation of closest node based on (y, x) or (lat, lon) attributes."""
         best_node = None
